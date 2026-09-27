@@ -27,7 +27,7 @@ TARGETS="${TARGETS:-$ALL_TARGETS}"
 TMP=/tmp/pi-backup
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) pi-backup: $*"; }
-die() { log "ERROR: $*"; exit 1; }
+die() { log "ERROR: $*" >&2; exit 1; }
 
 [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || die "OP_SERVICE_ACCOUNT_TOKEN is not set"
 
