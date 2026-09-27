@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["ghcr.io/pocket-id/pocket-id"],
+      "description": "Merging a Pocket ID bump publishes a new image tag with that version; homelab-compose then bumps pocket-id and pocket-id-backup together."
+    }
+  ]
+}

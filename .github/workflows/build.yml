@@ -1,0 +1,48 @@
+# Builds the image for amd64 + arm64 and pushes it to ghcr.io on every push
+# to main. Tags: the Pocket ID version from the Containerfile's FROM line
+# (e.g. 2.16.0) and sha-<commit>. Deliberately no pull_request trigger, so
+# nothing from a fork ever runs with package-write access.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read Pocket ID version
+        id: version
+        run: |
+          v=$(sed -n 's#^FROM ghcr.io/pocket-id/pocket-id:v\([0-9.]*\)$#\1#p' Containerfile)
+          test -n "$v" || { echo "no pocket-id version in Containerfile"; exit 1; }
+          echo "pocket_id=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.pocket_id }}
+            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}

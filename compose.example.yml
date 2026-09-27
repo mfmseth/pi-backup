@@ -1,0 +1,28 @@
+# Pocket ID with nightly backups to 1Password. Put OP_SERVICE_ACCOUNT_TOKEN
+# (and ENCRYPTION_KEY for pocket-id) in a .env file next to this one.
+services:
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:v2.16.0
+    restart: unless-stopped
+    environment:
+      APP_URL: https://auth.example.com
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - pocket-id-data:/app/data
+
+  pocket-id-backup:
+    # Same version as pocket-id above.
+    image: ghcr.io/mfmseth/pocket-id-backup:2.16.0
+    restart: unless-stopped
+    init: true
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+      OP_VAULT: homelab
+      KEEP: "3"
+      BACKUP_SCHEDULE: "15 7 * * *"
+      # PUSH_URL: https://uptime.example.com/api/push/<token>?status=up&msg=OK
+    volumes:
+      - pocket-id-data:/app/data
+
+volumes:
+  pocket-id-data:
