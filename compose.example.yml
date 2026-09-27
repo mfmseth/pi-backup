@@ -1,18 +1,10 @@
-# Pocket ID with nightly backups to 1Password. Put OP_SERVICE_ACCOUNT_TOKEN
-# (and ENCRYPTION_KEY for pocket-id) in a .env file next to this one.
+# pi-backup next to the apps it backs up. Put OP_SERVICE_ACCOUNT_TOKEN in a
+# .env file next to this one. Use the same project as the apps so the volume
+# names match (here the apps' volumes are pocket-id-data and arcane-data).
 services:
-  pocket-id:
-    image: ghcr.io/pocket-id/pocket-id:v2.16.0
-    restart: unless-stopped
-    environment:
-      APP_URL: https://auth.example.com
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-    volumes:
-      - pocket-id-data:/app/data
-
-  pocket-id-backup:
-    # Same version as pocket-id above.
-    image: ghcr.io/mfmseth/pocket-id-backup:2.16.0
+  pi-backup:
+    # Tag = your Pocket ID version.
+    image: ghcr.io/mfmseth/pi-backup:2.16.0
     restart: unless-stopped
     init: true
     environment:
@@ -22,7 +14,10 @@ services:
       BACKUP_SCHEDULE: "15 7 * * *"
       # PUSH_URL: https://uptime.example.com/api/push/<token>?status=up&msg=OK
     volumes:
-      - pocket-id-data:/app/data
+      - pocket-id-data:/pocket-id/data
+      - arcane-data:/arcane
+      - /etc/dns:/etc/dns
 
 volumes:
   pocket-id-data:
+  arcane-data:
