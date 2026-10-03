@@ -3,7 +3,7 @@
 # FROM line below (e.g. ghcr.io/mfmseth/pi-backup:2.16.0): run the tag that
 # equals your Pocket ID version, so export/import match its database.
 FROM docker.io/1password/op:2.39.0 AS op
-FROM ghcr.io/pocket-id/pocket-id:v2.16.0 AS pocket-id
+FROM ghcr.io/pocket-id/pocket-id:v2.17.0 AS pocket-id
 
 FROM docker.io/library/alpine:3.24
 LABEL org.opencontainers.image.source="https://github.com/mfmseth/pi-backup"
