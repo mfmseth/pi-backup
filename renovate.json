@@ -2,12 +2,16 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "helpers:pinGitHubActionDigests"
+    "helpers:pinGitHubActionDigests",
+    "customManagers:dockerfileVersions"
   ],
   "packageRules": [
     {
       "matchPackageNames": ["ghcr.io/pocket-id/pocket-id"],
-      "description": "Merging a Pocket ID bump publishes a new image tag with that version; the deploy repo then bumps pocket-id and pi-backup together."
+      "description": "Merging a Pocket ID bump publishes a new image tag with that version; the deploy repo then bumps pocket-id and pi-backup together.",
+      "prBodyNotes": [
+        "**Merge this before the Pocket ID bump in homelab-compose.** pi-backup's export only works with the same Pocket ID version as the live database; homelab-compose's CI fails its Pocket ID PR until this image tag exists and Renovate has added the matching pi-backup bump to it."
+      ]
     }
   ]
 }

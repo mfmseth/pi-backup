@@ -1,12 +1,12 @@
 #!/bin/sh
-# Nightly backups of pi's app state that git doesn't cover, to 1Password.
-# Runs in the pi-backup image; see README.md.
+# Nightly backups of pi's app state that git doesn't cover, encrypted with age
+# and uploaded to Cloudflare R2. Runs in the pi-backup image; see README.md.
 #
 #   serve                 (default) run `backup` on BACKUP_SCHEDULE (cron, UTC)
 #   backup                back up every target, keep the newest KEEP of each
 #   restore <target>      put the newest backup (or BACKUP_ID) back; refuses
 #                         to overwrite existing data unless FORCE=1
-#   list                  show the backups in 1Password, newest first
+#   list                  show the backups in the bucket, newest first
 #
 # Targets:
 #   pocket-id   Pocket ID (users, passkeys, groups, OIDC clients, signing keys)
@@ -17,10 +17,17 @@
 #               SQLite's online backup and integrity-checked
 #   technitium  Technitium's config (/etc/dns), minus stats, logs, cache and
 #               downloadable block lists
+#
+# Each backup is encrypted to an age public key and stored as
+# <bucket>/<target>/<target>-<UTC timestamp>.<ext>.age. Backing up needs only
+# the public key; restoring needs the private key. Anything not set in the
+# environment is read from 1Password with OP_SERVICE_ACCOUNT_TOKEN.
 set -eu
 
 VAULT="${OP_VAULT:-homelab}"
-KEEP="${KEEP:-3}"
+KEEP="${KEEP:-14}"
+R2_ITEM="${R2_ITEM:-cloudflare-r2-pi-backup}"
+AGE_ITEM="${AGE_ITEM:-pi-backup-age}"
 ALL_TARGETS="pocket-id arcane technitium"
 # Back up a subset with e.g. TARGETS="pocket-id technitium".
 TARGETS="${TARGETS:-$ALL_TARGETS}"
@@ -29,24 +36,68 @@ TMP=/tmp/pi-backup
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) pi-backup: $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
-[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || die "OP_SERVICE_ACCOUNT_TOKEN is not set"
+case "$KEEP" in '' | *[!0-9]* | 0) die "KEEP must be a whole number of at least 1" ;; esac
 
-# Backups of one target as JSON, newest first.
-backups() {
-  op item list --vault "$VAULT" --tags "$1-backup" --categories Document --format json \
-    | jq 'sort_by(.created_at) | reverse'
+op_read() { # op:// reference
+  [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || die "OP_SERVICE_ACCOUNT_TOKEN is not set (needed to read $1)"
+  op read "$1" || die "cannot read $1"
+}
+
+# rclone remote `r2:` from S3_* or, for whatever isn't set, the 1Password item
+# R2_ITEM (fields access_key_id, secret_access_key, account_id, bucket). Read
+# once in `backup`, then inherited by each target's process.
+storage() {
+  [ -z "${RCLONE_CONFIG_R2_TYPE:-}" ] || return 0
+  if [ -z "${S3_ACCESS_KEY_ID:-}" ] || [ -z "${S3_SECRET_ACCESS_KEY:-}" ] \
+    || [ -z "${S3_BUCKET:-}" ] || [ -z "${S3_ENDPOINT:-}" ]; then
+    [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] \
+      || die "OP_SERVICE_ACCOUNT_TOKEN is not set (needed to read op://$VAULT/$R2_ITEM)"
+    item=$(op item get "$R2_ITEM" --vault "$VAULT" --reveal --format json) \
+      || die "cannot read 1Password item '$R2_ITEM' in vault '$VAULT'"
+    field() { printf '%s' "$item" | jq -r --arg l "$1" '[.fields[] | select(.label == $l) | .value][0] // empty'; }
+    : "${S3_ACCESS_KEY_ID:=$(field access_key_id)}"
+    : "${S3_SECRET_ACCESS_KEY:=$(field secret_access_key)}"
+    : "${S3_BUCKET:=$(field bucket)}"
+    : "${S3_ENDPOINT:=https://$(field account_id).r2.cloudflarestorage.com}"
+  fi
+  for v in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_BUCKET S3_ENDPOINT; do
+    eval "val=\$$v"
+    case "$val" in '' | *REPLACE_WITH* | https://.r2.*)
+      die "$v is empty or still a placeholder (1Password item '$R2_ITEM')" ;;
+    esac
+  done
+  # No config file: the remote is defined entirely by these variables.
+  export RCLONE_CONFIG=/dev/null \
+    RCLONE_CONFIG_R2_TYPE=s3 \
+    RCLONE_CONFIG_R2_PROVIDER="${S3_PROVIDER:-Cloudflare}" \
+    RCLONE_CONFIG_R2_ACCESS_KEY_ID="$S3_ACCESS_KEY_ID" \
+    RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$S3_SECRET_ACCESS_KEY" \
+    RCLONE_CONFIG_R2_ENDPOINT="$S3_ENDPOINT" \
+    RCLONE_CONFIG_R2_REGION="${S3_REGION:-auto}" \
+    RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
+    S3_BUCKET
+}
+
+# Backups of one target, newest first: "<name>" (or "<name>  <size>" with -s).
+backups() { # [-s] target
+  fmt=p
+  [ "$1" = -s ] && { fmt=ps; shift; }
+  objs=$(rclone lsf --files-only --format "$fmt" --separator '  ' "r2:$S3_BUCKET/$1/") \
+    || die "$1: cannot list r2:$S3_BUCKET/$1/"
+  printf '%s\n' "$objs" | grep -E "^$1-[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\..+\.age( |\$)" | sort -r
 }
 
 upload() { # target file
   ts=$(date -u +%Y-%m-%d_%H%M%S)
-  ext="${2#*.}"
-  op document create "$2" --vault "$VAULT" --title "$1-backup $ts" \
-    --tags "$1-backup" --file-name "$1-$ts.$ext" >/dev/null
-  log "uploaded '$1-backup $ts' ($(wc -c <"$2") bytes)"
+  name="$1-$ts.${2#*.}.age"
+  age -r "$AGE_RECIPIENT" -o "$2.age" "$2"
+  rclone copyto "$2.age" "r2:$S3_BUCKET/$1/$name"
+  log "uploaded $1/$name ($(wc -c <"$2.age") bytes)"
   # Only after a successful upload: delete all but the newest KEEP.
-  for id in $(backups "$1" | jq -r ".[$KEEP:][] | .id"); do
-    op item delete "$id" --vault "$VAULT"
-    log "deleted old $1 backup $id"
+  all=$(backups "$1")
+  for o in $(printf '%s\n' "$all" | tail -n +$((KEEP + 1))); do
+    rclone deletefile "r2:$S3_BUCKET/$1/$o"
+    log "deleted old backup $1/$o"
   done
 }
 
@@ -55,8 +106,7 @@ upload() { # target file
 pocket_id_env() {
   cd /pocket-id
   if [ -z "${ENCRYPTION_KEY:-}" ]; then
-    ENCRYPTION_KEY=$(op read "op://$VAULT/pocket-id/encryption_key") \
-      || die "pocket-id: cannot read op://$VAULT/pocket-id/encryption_key"
+    ENCRYPTION_KEY=$(op_read "op://$VAULT/pocket-id/encryption_key")
     export ENCRYPTION_KEY
   fi
 }
@@ -94,6 +144,10 @@ backup() {
   umask 077
   mkdir -p "$TMP"
   trap 'rm -rf "$TMP"' EXIT
+  # Read the storage credentials and the public key once, for every target.
+  storage
+  [ -n "${AGE_RECIPIENT:-}" ] || AGE_RECIPIENT=$(op_read "op://$VAULT/$AGE_ITEM/public_key")
+  case "$AGE_RECIPIENT" in age1?*) export AGE_RECIPIENT ;; *) die "AGE_RECIPIENT is not an age public key (age1...)" ;; esac
   failed=""
   for t in $TARGETS; do
     # A separate process, not a ( ) subshell: `set -e` is ignored inside
@@ -110,34 +164,45 @@ backup() {
 restore() {
   t="${1:-}"
   case " $ALL_TARGETS " in *" $t "*) ;; *) die "usage: pi-backup restore <$(echo $ALL_TARGETS | tr ' ' '|')>" ;; esac
-  id="${BACKUP_ID:-$(backups "$t" | jq -r '.[0].id // empty')}"
-  [ -n "$id" ] || die "no documents tagged '$t-backup' in vault '$VAULT'"
+  case "$t" in
+    pocket-id) live=/pocket-id/data/pocket-id.db ;;
+    arcane) live=/arcane/arcane.db ;;
+    technitium) live=/etc/dns/dns.config ;;
+  esac
+  if [ -s "$live" ] && [ "${FORCE:-}" != 1 ]; then
+    die "$live already exists. Stop $t and run again with FORCE=1."
+  fi
+  storage
+  if [ -n "${BACKUP_ID:-}" ]; then
+    name="${BACKUP_ID##*/}"  # also accept <target>/<name>, as `list` prints it
+  else
+    all=$(backups "$t")
+    name=$(printf '%s\n' "$all" | head -n 1)
+  fi
+  [ -n "$name" ] || die "no $t backups in r2:$S3_BUCKET/$t/"
   umask 077
   mkdir -p "$TMP"
   trap 'rm -rf "$TMP"' EXIT
+  if [ -n "${AGE_IDENTITY:-}" ]; then
+    printf '%s\n' "$AGE_IDENTITY" >"$TMP/identity"
+  else
+    op_read "op://$VAULT/$AGE_ITEM/private_key" >"$TMP/identity"
+  fi
+  rclone copyto "r2:$S3_BUCKET/$t/$name" "$TMP/restore.age"
   f="$TMP/restore"
-  op document get "$id" --vault "$VAULT" --out-file "$f" --force >/dev/null
-  log "restoring $(op item get "$id" --vault "$VAULT" --format json | jq -r .title)"
+  age -d -i "$TMP/identity" -o "$f" "$TMP/restore.age"
+  log "restoring $t/$name"
   case "$t" in
     pocket-id)
-      if [ -s /pocket-id/data/pocket-id.db ] && [ "${FORCE:-}" != 1 ]; then
-        die "/pocket-id/data/pocket-id.db already exists. Stop pocket-id and run again with FORCE=1."
-      fi
       pocket_id_env
       pocket-id import --path "$f" --yes
       ;;
     arcane)
-      if [ -s /arcane/arcane.db ] && [ "${FORCE:-}" != 1 ]; then
-        die "/arcane/arcane.db already exists. Stop arcane and run again with FORCE=1."
-      fi
       rm -f /arcane/arcane.db-wal /arcane/arcane.db-shm
       gunzip -c "$f" >/arcane/arcane.db
       chown 65532:65532 /arcane/arcane.db  # Arcane runs as 65532
       ;;
     technitium)
-      if [ -s /etc/dns/dns.config ] && [ "${FORCE:-}" != 1 ]; then
-        die "/etc/dns/dns.config already exists. Stop technitium and run again with FORCE=1."
-      fi
       tar -C /etc/dns -xzpf "$f"
       ;;
   esac
@@ -145,8 +210,10 @@ restore() {
 }
 
 list() {
+  storage
   for t in $TARGETS; do
-    backups "$t" | jq -r '.[] | "\(.created_at)  \(.id)  \(.title)"'
+    all=$(backups -s "$t")
+    [ -z "$all" ] || printf '%s\n' "$all" | sed "s#^#$t/#"
   done
 }
 
@@ -156,7 +223,7 @@ serve() {
   (umask 077; export -p >/run/pi-backup.env)
   echo "$schedule . /run/pi-backup.env; /usr/local/bin/pi-backup backup >/proc/1/fd/1 2>&1" \
     >/etc/crontabs/root
-  log "backing up [$TARGETS] on '$schedule' (UTC), keeping the newest $KEEP of each in vault '$VAULT'"
+  log "backing up [$TARGETS] on '$schedule' (UTC) to R2, keeping the newest $KEEP of each"
   exec crond -f -l 8
 }
 

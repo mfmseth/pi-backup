@@ -1,7 +1,9 @@
-# Smoke-tests the image, then builds it for amd64 + arm64 and pushes it to
-# ghcr.io on every push to main. Tags: the Pocket ID version from the Containerfile's FROM line
-# (e.g. 2.16.0) and sha-<commit>. Deliberately no pull_request trigger, so
-# nothing from a fork ever runs with package-write access.
+# Smoke-tests the image (tools, refusal paths, and an encrypted backup +
+# restore against a local S3 server), then builds it for amd64 + arm64 and
+# pushes it to ghcr.io on every push to main. Tags: the Pocket ID version from
+# the Containerfile's FROM line (e.g. 2.18.0) and sha-<commit>. Deliberately
+# no pull_request trigger, so nothing from a fork ever runs with package-write
+# access.
 name: build
 
 on:
@@ -47,12 +49,36 @@ jobs:
           docker run --rm --entrypoint op "$img" --version
           docker run --rm --entrypoint sqlite3 "$img" --version
           docker run --rm --entrypoint pocket-id "$img" version | grep -F "${{ steps.version.outputs.pocket_id }}"
+          docker run --rm --entrypoint rclone "$img" version
+          docker run --rm --entrypoint age "$img" --version
           docker run --rm --entrypoint sh "$img" -c 'jq --version && tar --version | head -1 && unzip 2>&1 | head -1'
           docker run --rm --entrypoint sh "$img" -c 'sh -n /usr/local/bin/pi-backup'
           # No token -> clear error, non-zero exit.
           ! docker run --rm "$img" list 2>err.txt; grep -q "OP_SERVICE_ACCOUNT_TOKEN is not set" err.txt || { cat err.txt; exit 1; }
           # Unknown restore target -> usage, non-zero exit.
           ! docker run --rm -e OP_SERVICE_ACCOUNT_TOKEN=x "$img" restore nope 2>&1 | tee out.txt; grep -q "usage: pi-backup restore" out.txt
+          # Encrypted round trip through a local S3 server (rclone's): back up
+          # Technitium twice with KEEP=1, check the object is age-encrypted and
+          # the older one was pruned, then restore it into an empty directory.
+          docker network create t
+          docker run -d --name s3 --network t --entrypoint sh "$img" -c \
+            'mkdir -p /data/b && exec rclone serve s3 --config /dev/null --auth-key testkey,testsecret --addr :9000 /data'
+          docker run --rm --entrypoint age-keygen "$img" >key.txt 2>/dev/null
+          sleep 2  # let the S3 server start
+          s3="--network t -e S3_ENDPOINT=http://s3:9000 -e S3_ACCESS_KEY_ID=testkey -e S3_SECRET_ACCESS_KEY=testsecret -e S3_BUCKET=b"
+          mkdir -p dns/zones dns2 && echo '{}' >dns/dns.config && echo zone >dns/zones/a.zone
+          for i in 1 2; do
+            docker run --rm $s3 -e TARGETS=technitium -e KEEP=1 -e AGE_RECIPIENT="$(grep -o 'age1[0-9a-z]*' key.txt)" \
+              -v "$PWD/dns:/etc/dns" "$img" backup; sleep 1
+          done
+          docker run --rm $s3 -e TARGETS=technitium "$img" list | tee list.txt
+          test "$(wc -l <list.txt)" = 1
+          docker exec s3 sh -c 'head -c 21 /data/b/technitium/*' | grep -qx 'age-encryption.org/v1'
+          docker run --rm $s3 -e AGE_IDENTITY="$(grep AGE-SECRET-KEY key.txt)" -v "$PWD/dns2:/etc/dns" "$img" restore technitium
+          diff -r dns dns2
+          # An existing config is never overwritten without FORCE=1.
+          ! docker run --rm $s3 -e AGE_IDENTITY="$(grep AGE-SECRET-KEY key.txt)" -v "$PWD/dns2:/etc/dns" "$img" restore technitium 2>err.txt
+          grep -q FORCE=1 err.txt
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
