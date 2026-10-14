@@ -4,7 +4,7 @@
 services:
   pi-backup:
     # Tag = your Pocket ID version.
-    image: ghcr.io/mfmseth/pi-backup:2.16.0
+    image: ghcr.io/mfmseth/pi-backup:2.18.0
     restart: unless-stopped
     init: true
     environment:
