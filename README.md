@@ -7,7 +7,6 @@ Raspberry Pi running these apps with Podman/Docker Compose; works on any host.
 | Target | What's backed up | How |
 |---|---|---|
 | `pocket-id` | [Pocket ID](https://github.com/pocket-id/pocket-id): users, passkeys, groups, OIDC clients, signing keys | Pocket ID's own `pocket-id export`, using the binary from the same Pocket ID version |
-| `arcane` | [Arcane](https://github.com/getarcaneapp/arcane)'s SQLite database: environments, users, API keys | SQLite's online backup, then an integrity check |
 | `technitium` | [Technitium DNS](https://technitium.com/dns/)'s config: settings, users/SSO, zones | Archive of `/etc/dns` without stats, logs, cache and downloadable block lists |
 
 Each night it backs up every target, encrypts each backup with
@@ -33,7 +32,6 @@ version has migrated.
 | Path in the container | Mount |
 |---|---|
 | `/pocket-id/data` | Pocket ID's data volume |
-| `/arcane` | Arcane's data volume |
 | `/etc/dns` | Technitium's config directory |
 
 ## Settings
@@ -51,7 +49,7 @@ from 1Password with a service-account token.
 | `AGE_ITEM` | `pi-backup-age` | 1Password item with the fields `public_key` and `private_key` (from `age-keygen`). |
 | `AGE_RECIPIENT` | `public_key` from `AGE_ITEM` | age public key (`age1...`) the backups are encrypted to. |
 | `AGE_IDENTITY` | `private_key` from `AGE_ITEM` | age private key (`AGE-SECRET-KEY-1...`), read only by `restore`. |
-| `TARGETS` | `pocket-id arcane technitium` | Which targets to back up. |
+| `TARGETS` | `pocket-id technitium` | Which targets to back up. |
 | `KEEP` | `14` | How many backups of each target to keep. |
 | `BACKUP_SCHEDULE` | `25 7 * * *` | Cron schedule, UTC. |
 | `PUSH_URL` | (none) | URL to call after a night where every target succeeded. |
@@ -71,7 +69,7 @@ docker exec pi-backup pi-backup list     # backups and their sizes, newest first
 With the app **stopped** (or not started yet on a new machine):
 
 ```sh
-docker compose run --rm pi-backup restore pocket-id   # or arcane / technitium
+docker compose run --rm pi-backup restore pocket-id   # or technitium
 ```
 
 then start the app. Pocket ID comes back with the same users, passkeys and
@@ -79,7 +77,7 @@ OIDC clients (start it with the same `ENCRYPTION_KEY`), so every app's
 sign-in keeps working.
 
 - It restores the newest backup. Pick another with `-e BACKUP_ID=<name>`, as
-  printed by `list` (e.g. `arcane/arcane-2026-10-14_071500.db.gz.age`).
+  printed by `list` (e.g. `technitium/technitium-2026-10-14_071500.tar.gz.age`).
 - It refuses to overwrite existing data. To replace it, stop the app and add
   `-e FORCE=1`.
 

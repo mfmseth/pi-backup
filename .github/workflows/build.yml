@@ -47,7 +47,6 @@ jobs:
           set -eux
           img=pi-backup:test
           docker run --rm --entrypoint op "$img" --version
-          docker run --rm --entrypoint sqlite3 "$img" --version
           docker run --rm --entrypoint pocket-id "$img" version | grep -F "${{ steps.version.outputs.pocket_id }}"
           docker run --rm --entrypoint rclone "$img" version
           docker run --rm --entrypoint age "$img" --version

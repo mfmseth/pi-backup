@@ -1,4 +1,4 @@
-# pi-backup: Alpine + sqlite + the 1Password CLI + the pocket-id binary, with
+# pi-backup: Alpine + the 1Password CLI + the pocket-id binary, with
 # age to encrypt and rclone to upload to Cloudflare R2.
 # The published image is tagged with the Pocket ID version in the pocket-id
 # FROM line below (e.g. ghcr.io/mfmseth/pi-backup:2.18.0): run the tag that
@@ -19,8 +19,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM docker.io/library/alpine:3.24
 LABEL org.opencontainers.image.source="https://github.com/mfmseth/pi-backup"
-LABEL org.opencontainers.image.description="Nightly encrypted backups of Pocket ID, Arcane and Technitium to Cloudflare R2, with one-command restores"
-RUN apk add --no-cache jq sqlite tar
+LABEL org.opencontainers.image.description="Nightly encrypted backups of Pocket ID and Technitium to Cloudflare R2, with one-command restores"
+RUN apk add --no-cache jq tar
 COPY --from=op /usr/local/bin/op /usr/local/bin/op
 COPY --from=pocket-id /app/pocket-id /usr/local/bin/pocket-id
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone

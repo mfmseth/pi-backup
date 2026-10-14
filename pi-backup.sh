@@ -13,8 +13,6 @@
 #               via `pocket-id export`, with the pocket-id binary copied from
 #               the same image version pi runs; volume at /pocket-id/data.
 #               ENCRYPTION_KEY comes from op://$OP_VAULT/pocket-id/encryption_key
-#   arcane      Arcane's SQLite database (volume at /arcane), copied with
-#               SQLite's online backup and integrity-checked
 #   technitium  Technitium's config (/etc/dns), minus stats, logs, cache and
 #               downloadable block lists
 #
@@ -28,7 +26,7 @@ VAULT="${OP_VAULT:-homelab}"
 KEEP="${KEEP:-14}"
 R2_ITEM="${R2_ITEM:-cloudflare-r2-pi-backup}"
 AGE_ITEM="${AGE_ITEM:-pi-backup-age}"
-ALL_TARGETS="pocket-id arcane technitium"
+ALL_TARGETS="pocket-id technitium"
 # Back up a subset with e.g. TARGETS="pocket-id technitium".
 TARGETS="${TARGETS:-$ALL_TARGETS}"
 TMP=/tmp/pi-backup
@@ -121,16 +119,6 @@ backup_pocket_id() {
   upload pocket-id "$TMP/pocket-id.zip"
 }
 
-backup_arcane() {
-  [ -s /arcane/arcane.db ] || die "arcane: /arcane/arcane.db not found"
-  rm -f "$TMP/arcane.db"
-  sqlite3 /arcane/arcane.db ".backup '$TMP/arcane.db'"
-  [ "$(sqlite3 "$TMP/arcane.db" 'PRAGMA integrity_check;')" = ok ] \
-    || die "arcane: backup copy failed its integrity check"
-  gzip -9 -f "$TMP/arcane.db"
-  upload arcane "$TMP/arcane.db.gz"
-}
-
 backup_technitium() {
   [ -s /etc/dns/dns.config ] || die "technitium: /etc/dns/dns.config not found"
   tar -C /etc/dns -czf "$TMP/technitium.tar.gz" \
@@ -166,7 +154,6 @@ restore() {
   case " $ALL_TARGETS " in *" $t "*) ;; *) die "usage: pi-backup restore <$(echo $ALL_TARGETS | tr ' ' '|')>" ;; esac
   case "$t" in
     pocket-id) live=/pocket-id/data/pocket-id.db ;;
-    arcane) live=/arcane/arcane.db ;;
     technitium) live=/etc/dns/dns.config ;;
   esac
   if [ -s "$live" ] && [ "${FORCE:-}" != 1 ]; then
@@ -196,11 +183,6 @@ restore() {
     pocket-id)
       pocket_id_env
       pocket-id import --path "$f" --yes
-      ;;
-    arcane)
-      rm -f /arcane/arcane.db-wal /arcane/arcane.db-shm
-      gunzip -c "$f" >/arcane/arcane.db
-      chown 65532:65532 /arcane/arcane.db  # Arcane runs as 65532
       ;;
     technitium)
       tar -C /etc/dns -xzpf "$f"
