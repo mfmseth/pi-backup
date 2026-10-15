@@ -11,7 +11,9 @@ Raspberry Pi running these apps with Podman/Docker Compose; works on any host.
 
 Each night it backs up every target, encrypts each backup with
 [age](https://age-encryption.org) to your public key, and uploads it with
-[rclone](https://rclone.org) as `<bucket>/<target>/<target>-<date>_<time>.<ext>.age`.
+[rclone](https://rclone.org) to the target's own bucket as
+`<S3_BUCKET_PREFIX>-<target>/<target>-<date>_<time>.<ext>.age` (e.g.
+`pi-backup-pocket-id/pocket-id-2026-10-14_072500.zip.age`).
 It keeps the newest `KEEP` of each target, deleting older ones only after a
 successful upload. When every target succeeds it calls `PUSH_URL` (e.g. an
 Uptime Kuma push monitor), so a missed night can alert you.
@@ -43,8 +45,9 @@ from 1Password with a service-account token.
 |---|---|---|
 | `OP_SERVICE_ACCOUNT_TOKEN` | (none) | 1Password service-account token with read access to the vault. Not needed if every secret below is set directly. |
 | `OP_VAULT` | `homelab` | Vault the items below are read from. |
-| `R2_ITEM` | `cloudflare-r2-pi-backup` | 1Password item with the fields `access_key_id`, `secret_access_key`, `account_id` and `bucket`. |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET` | from `R2_ITEM` | Storage credentials and bucket. Use an R2 API token with Object Read & Write on this bucket only. |
+| `R2_ITEM` | `cloudflare-r2-pi-backup` | 1Password item with the fields `access_key_id`, `secret_access_key` and `account_id`. |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from `R2_ITEM` | Storage credentials. Use an R2 API token with Object Read & Write on the targets' buckets only. |
+| `S3_BUCKET_PREFIX` | `pi-backup` | Each target is stored in its own bucket, `<S3_BUCKET_PREFIX>-<target>` (e.g. `pi-backup-pocket-id`). Create the buckets first. |
 | `S3_ENDPOINT` | `https://<account_id>.r2.cloudflarestorage.com` | Set it (and `S3_PROVIDER`, rclone's name for it) for other S3-compatible storage. |
 | `AGE_ITEM` | `pi-backup-age` | 1Password item with the fields `public_key` and `private_key` (from `age-keygen`). |
 | `AGE_RECIPIENT` | `public_key` from `AGE_ITEM` | age public key (`age1...`) the backups are encrypted to. |
@@ -81,7 +84,7 @@ sign-in keeps working.
 - It refuses to overwrite existing data. To replace it, stop the app and add
   `-e FORCE=1`.
 
-To decrypt a backup by hand: `rclone copy` it from the bucket, then
+To decrypt a backup by hand: `rclone copy` it from the target's bucket, then
 `age -d -i key.txt -o out <file>.age`.
 
 ## Safety

@@ -61,10 +61,10 @@ jobs:
           # the older one was pruned, then restore it into an empty directory.
           docker network create t
           docker run -d --name s3 --network t --entrypoint sh "$img" -c \
-            'mkdir -p /data/b && exec rclone serve s3 --config /dev/null --auth-key testkey,testsecret --addr :9000 /data'
+            'mkdir -p /data/b-technitium && exec rclone serve s3 --config /dev/null --auth-key testkey,testsecret --addr :9000 /data'
           docker run --rm --entrypoint age-keygen "$img" >key.txt 2>/dev/null
           sleep 2  # let the S3 server start
-          s3="--network t -e S3_ENDPOINT=http://s3:9000 -e S3_ACCESS_KEY_ID=testkey -e S3_SECRET_ACCESS_KEY=testsecret -e S3_BUCKET=b"
+          s3="--network t -e S3_ENDPOINT=http://s3:9000 -e S3_ACCESS_KEY_ID=testkey -e S3_SECRET_ACCESS_KEY=testsecret -e S3_BUCKET_PREFIX=b"
           mkdir -p dns/zones dns2 && echo '{}' >dns/dns.config && echo zone >dns/zones/a.zone
           for i in 1 2; do
             docker run --rm $s3 -e TARGETS=technitium -e KEEP=1 -e AGE_RECIPIENT="$(grep -o 'age1[0-9a-z]*' key.txt)" \
@@ -72,7 +72,7 @@ jobs:
           done
           docker run --rm $s3 -e TARGETS=technitium "$img" list | tee list.txt
           test "$(wc -l <list.txt)" = 1
-          docker exec s3 sh -c 'head -c 21 /data/b/technitium/*' | grep -qx 'age-encryption.org/v1'
+          docker exec s3 sh -c 'head -c 21 /data/b-technitium/*' | grep -qx 'age-encryption.org/v1'
           docker run --rm $s3 -e AGE_IDENTITY="$(grep AGE-SECRET-KEY key.txt)" -v "$PWD/dns2:/etc/dns" "$img" restore technitium
           diff -r dns dns2
           # An existing config is never overwritten without FORCE=1.

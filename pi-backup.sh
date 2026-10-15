@@ -6,7 +6,7 @@
 #   backup                back up every target, keep the newest KEEP of each
 #   restore <target>      put the newest backup (or BACKUP_ID) back; refuses
 #                         to overwrite existing data unless FORCE=1
-#   list                  show the backups in the bucket, newest first
+#   list                  show the backups in each target's bucket, newest first
 #
 # Targets:
 #   pocket-id   Pocket ID (users, passkeys, groups, OIDC clients, signing keys)
@@ -16,8 +16,9 @@
 #   technitium  Technitium's config (/etc/dns), minus stats, logs, cache and
 #               downloadable block lists
 #
-# Each backup is encrypted to an age public key and stored as
-# <bucket>/<target>/<target>-<UTC timestamp>.<ext>.age. Backing up needs only
+# Each target has its own bucket, <S3_BUCKET_PREFIX>-<target>. Each backup is
+# encrypted to an age public key and stored there as
+# <target>-<UTC timestamp>.<ext>.age. Backing up needs only
 # the public key; restoring needs the private key. Anything not set in the
 # environment is read from 1Password with OP_SERVICE_ACCOUNT_TOKEN.
 set -eu
@@ -42,12 +43,12 @@ op_read() { # op:// reference
 }
 
 # rclone remote `r2:` from S3_* or, for whatever isn't set, the 1Password item
-# R2_ITEM (fields access_key_id, secret_access_key, account_id, bucket). Read
+# R2_ITEM (fields access_key_id, secret_access_key, account_id). Read
 # once in `backup`, then inherited by each target's process.
 storage() {
   [ -z "${RCLONE_CONFIG_R2_TYPE:-}" ] || return 0
   if [ -z "${S3_ACCESS_KEY_ID:-}" ] || [ -z "${S3_SECRET_ACCESS_KEY:-}" ] \
-    || [ -z "${S3_BUCKET:-}" ] || [ -z "${S3_ENDPOINT:-}" ]; then
+    || [ -z "${S3_ENDPOINT:-}" ]; then
     [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] \
       || die "OP_SERVICE_ACCOUNT_TOKEN is not set (needed to read op://$VAULT/$R2_ITEM)"
     item=$(op item get "$R2_ITEM" --vault "$VAULT" --reveal --format json) \
@@ -55,10 +56,9 @@ storage() {
     field() { printf '%s' "$item" | jq -r --arg l "$1" '[.fields[] | select(.label == $l) | .value][0] // empty'; }
     : "${S3_ACCESS_KEY_ID:=$(field access_key_id)}"
     : "${S3_SECRET_ACCESS_KEY:=$(field secret_access_key)}"
-    : "${S3_BUCKET:=$(field bucket)}"
     : "${S3_ENDPOINT:=https://$(field account_id).r2.cloudflarestorage.com}"
   fi
-  for v in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_BUCKET S3_ENDPOINT; do
+  for v in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT; do
     eval "val=\$$v"
     case "$val" in '' | *REPLACE_WITH* | https://.r2.*)
       die "$v is empty or still a placeholder (1Password item '$R2_ITEM')" ;;
@@ -72,16 +72,18 @@ storage() {
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$S3_SECRET_ACCESS_KEY" \
     RCLONE_CONFIG_R2_ENDPOINT="$S3_ENDPOINT" \
     RCLONE_CONFIG_R2_REGION="${S3_REGION:-auto}" \
-    RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
-    S3_BUCKET
+    RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
 }
+
+# A target's bucket, as an rclone path.
+bucket() { echo "r2:${S3_BUCKET_PREFIX:-pi-backup}-$1"; }
 
 # Backups of one target, newest first: "<name>" (or "<name>  <size>" with -s).
 backups() { # [-s] target
   fmt=p
   [ "$1" = -s ] && { fmt=ps; shift; }
-  objs=$(rclone lsf --files-only --format "$fmt" --separator '  ' "r2:$S3_BUCKET/$1/") \
-    || die "$1: cannot list r2:$S3_BUCKET/$1/"
+  objs=$(rclone lsf --files-only --format "$fmt" --separator '  ' "$(bucket "$1")") \
+    || die "$1: cannot list $(bucket "$1")"
   printf '%s\n' "$objs" | grep -E "^$1-[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\..+\.age( |\$)" | sort -r
 }
 
@@ -89,12 +91,12 @@ upload() { # target file
   ts=$(date -u +%Y-%m-%d_%H%M%S)
   name="$1-$ts.${2#*.}.age"
   age -r "$AGE_RECIPIENT" -o "$2.age" "$2"
-  rclone copyto "$2.age" "r2:$S3_BUCKET/$1/$name"
+  rclone copyto "$2.age" "$(bucket "$1")/$name"
   log "uploaded $1/$name ($(wc -c <"$2.age") bytes)"
   # Only after a successful upload: delete all but the newest KEEP.
   all=$(backups "$1")
   for o in $(printf '%s\n' "$all" | tail -n +$((KEEP + 1))); do
-    rclone deletefile "r2:$S3_BUCKET/$1/$o"
+    rclone deletefile "$(bucket "$1")/$o"
     log "deleted old backup $1/$o"
   done
 }
@@ -166,7 +168,7 @@ restore() {
     all=$(backups "$t")
     name=$(printf '%s\n' "$all" | head -n 1)
   fi
-  [ -n "$name" ] || die "no $t backups in r2:$S3_BUCKET/$t/"
+  [ -n "$name" ] || die "no $t backups in $(bucket "$t")"
   umask 077
   mkdir -p "$TMP"
   trap 'rm -rf "$TMP"' EXIT
@@ -175,7 +177,7 @@ restore() {
   else
     op_read "op://$VAULT/$AGE_ITEM/private_key" >"$TMP/identity"
   fi
-  rclone copyto "r2:$S3_BUCKET/$t/$name" "$TMP/restore.age"
+  rclone copyto "$(bucket "$t")/$name" "$TMP/restore.age"
   f="$TMP/restore"
   age -d -i "$TMP/identity" -o "$f" "$TMP/restore.age"
   log "restoring $t/$name"
