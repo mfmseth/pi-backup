@@ -33,7 +33,20 @@ TARGETS="${TARGETS:-$ALL_TARGETS}"
 TMP=/tmp/pi-backup
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) pi-backup: $*"; }
-die() { log "ERROR: $*" >&2; exit 1; }
+die() {
+  log "ERROR: $*" >&2
+  # During `backup`, tell Uptime Kuma right away instead of just not checking in.
+  [ -z "${in_backup:-}" ] || push down "$*" || true
+  exit 1
+}
+
+# Report to Uptime Kuma's push monitor: push up|down <message>. PUSH_URL's own
+# status/msg parameters are replaced.
+push() {
+  [ -n "${PUSH_URL:-}" ] || return 0
+  msg=$(printf '%s' "$2" | sed 's/%/%25/g; s/ /%20/g; s/:/%3A/g; s/&/%26/g; s/#/%23/g; s/?/%3F/g')
+  wget -q -O /dev/null "${PUSH_URL%%\?*}?status=$1&msg=$msg"
+}
 
 case "$KEEP" in '' | *[!0-9]* | 0) die "KEEP must be a whole number of at least 1" ;; esac
 
@@ -131,6 +144,7 @@ backup_technitium() {
 }
 
 backup() {
+  in_backup=1
   umask 077
   mkdir -p "$TMP"
   trap 'rm -rf "$TMP"' EXIT
@@ -144,9 +158,9 @@ backup() {
     # anything on the left of `||`, so a failed upload could go on to prune.
     "$0" _one "$t" || failed="$failed $t"
   done
-  [ -z "$failed" ] || die "failed:$failed (no Uptime Kuma check-in)"
+  [ -z "$failed" ] || die "failed:$failed"
   if [ -n "${PUSH_URL:-}" ]; then
-    wget -q -O /dev/null "$PUSH_URL" && log "checked in with Uptime Kuma" \
+    push up OK && log "checked in with Uptime Kuma" \
       || log "WARNING: Uptime Kuma check-in failed (backups themselves are fine)"
   fi
 }

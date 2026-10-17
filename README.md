@@ -16,7 +16,10 @@ Each night it backs up every target, encrypts each backup with
 `pi-backup-pocket-id/pocket-id-2026-10-14_072500.zip.age`).
 It keeps the newest `KEEP` of each target, deleting older ones only after a
 successful upload. When every target succeeds it calls `PUSH_URL` (e.g. an
-Uptime Kuma push monitor), so a missed night can alert you.
+Uptime Kuma push monitor) with `status=up`; when anything fails it calls it
+right away with `status=down` and the error (e.g. `failed: pocket-id`), and a
+night that never runs shows up as a missed check-in. Give the push monitor 0
+retries, or Uptime Kuma treats a single `down` as pending.
 
 Backing up needs only the age **public** key. The **private** key is needed
 only to restore, so keep it somewhere that survives losing the host (it's in
@@ -55,7 +58,7 @@ from 1Password with a service-account token.
 | `TARGETS` | `pocket-id technitium` | Which targets to back up. |
 | `KEEP` | `14` | How many backups of each target to keep. |
 | `BACKUP_SCHEDULE` | `25 7 * * *` | Cron schedule, UTC. |
-| `PUSH_URL` | (none) | URL to call after a night where every target succeeded. |
+| `PUSH_URL` | (none) | Uptime Kuma push URL: called with `status=up` after a night where every target succeeded, `status=down&msg=<error>` as soon as a backup fails. |
 | `ENCRYPTION_KEY` | read from `op://$OP_VAULT/pocket-id/encryption_key` | Pocket ID's `ENCRYPTION_KEY`, needed for its export and import. |
 
 See [`compose.example.yml`](compose.example.yml).
