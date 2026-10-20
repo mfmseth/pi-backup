@@ -9,7 +9,7 @@ FROM docker.io/rclone/rclone:1.75.2 AS rclone
 
 # age has no official image: build it from source (checked against the Go
 # checksum database), cross-compiled on the build machine for each platform.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.2-alpine3.24 AS age
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.3-alpine3.24 AS age
 ARG TARGETOS TARGETARCH
 # renovate: datasource=go depName=filippo.io/age
 ARG AGE_VERSION=v1.3.2
