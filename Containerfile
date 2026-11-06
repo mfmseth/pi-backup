@@ -5,7 +5,7 @@
 # equals your Pocket ID version, so export/import match its database.
 FROM docker.io/1password/op:2.39.0 AS op
 FROM ghcr.io/pocket-id/pocket-id:v2.18.0 AS pocket-id
-FROM docker.io/rclone/rclone:1.75.2 AS rclone
+FROM docker.io/rclone/rclone:1.76.0 AS rclone
 
 # age has no official image: build it from source (checked against the Go
 # checksum database), cross-compiled on the build machine for each platform.
